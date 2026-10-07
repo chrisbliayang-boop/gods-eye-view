@@ -4,6 +4,7 @@ import { promises as fsp } from 'node:fs';
 import {
   celestrakProxy,
   rocketLaunchesProxy,
+  upcomingLaunchesProxy,
   launchLibraryRequestHeaders,
   LL2_CACHE_TTL_MS,
 } from 'gods-eye-view/server/providers/space';
@@ -146,3 +147,32 @@ for (const preview of [false, true])
     assert.equal(hit.body, first.body);
     assert.equal(calls, 1);
   });
+
+test('upcoming launch plugin caches the upcoming feed and serves stale on errors', async (t) => {
+  let calls = 0;
+  let fail = false;
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    calls++;
+    assert.match(String(url), /\/launches\/upcoming\//);
+    if (fail) return new Response('nope', { status: 503 });
+    return Response.json({ results: [{ id: 'next-launch' }] });
+  });
+  const request = install(upcomingLaunchesProxy());
+  assert.equal(
+    (await request('/api/launches/upcoming', '/', 'POST')).status,
+    405,
+  );
+  const first = await request('/api/launches/upcoming');
+  assert.equal(first.headers['X-GEV-Cache'], 'MISS');
+  assert.equal(
+    (await request('/api/launches/upcoming')).headers['X-GEV-Cache'],
+    'HIT',
+  );
+  assert.equal(calls, 1);
+  t.mock.method(Date, 'now', () => 8.64e15);
+  fail = true;
+  const stale = await request('/api/launches/upcoming');
+  assert.equal(stale.status, 200);
+  assert.equal(stale.headers['X-GEV-Cache'], 'STALE-ERROR');
+  assert.equal(stale.body, first.body);
+});

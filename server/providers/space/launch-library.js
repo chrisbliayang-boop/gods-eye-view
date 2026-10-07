@@ -4,7 +4,10 @@ import {
   readResponseTextCapped,
   coalesceProxyRequest,
 } from '../common/http.js';
-import { launchLibraryRecentUrl } from '../../../src/data/spaceProviderRequests.js';
+import {
+  launchLibraryRecentUrl,
+  launchLibraryUpcomingUrl,
+} from '../../../src/data/spaceProviderRequests.js';
 
 export const LL2_CACHE_TTL_MS = 15 * 60_000;
 
@@ -134,6 +137,97 @@ export function rocketLaunchesProxy() {
 
   return {
     name: 'rocket-launches-proxy',
+    configureServer(server) {
+      install(server.middlewares);
+    },
+    configurePreviewServer(server) {
+      install(server.middlewares);
+    },
+  };
+}
+
+/**
+ * Proxy Launch Library 2's upcoming-launch feed at /api/launches/upcoming.
+ * The recent feed above stops at "now", so it can never answer "what's next".
+ * Memory-cached for LL2_CACHE_TTL_MS; serves the last good copy on errors.
+ * Register before rocketLaunchesProxy, whose /api/launches mount also
+ * matches this path.
+ */
+export function upcomingLaunchesProxy() {
+  const maxResponseBytes = 4 * 1024 * 1024;
+  let cache = null;
+  const inFlight = new Map();
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=900' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const upstream = await fetch(launchLibraryUpcomingUrl(), {
+      signal: AbortSignal.timeout(20000),
+      headers: launchLibraryRequestHeaders(),
+    });
+    const body = await readResponseTextCapped(upstream, maxResponseBytes);
+    if (!upstream.ok) {
+      const error = new Error(`upstream HTTP ${upstream.status}`);
+      error.upstreamStatus = upstream.status;
+      throw error;
+    }
+    if (!Array.isArray(JSON.parse(body)?.results))
+      throw new Error('malformed upstream response');
+    cache = { at: Date.now(), body };
+    return cache;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/launches/upcoming', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      if (cache && Date.now() - cache.at < LL2_CACHE_TTL_MS) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(
+        inFlight,
+        'upcoming-launches',
+        refreshUpstream,
+      );
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        // Log only a bounded status, never upstream bodies, URLs, or credentials.
+        const status = Number.isInteger(error?.upstreamStatus)
+          ? error.upstreamStatus
+          : 502;
+        if (!request.shared)
+          console.warn(
+            `[launch-library-proxy] upcoming refresh failed (HTTP ${status})${stale ? ' — serving stale cache' : ''}`,
+          );
+        if (stale) {
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(
+          res,
+          status,
+          JSON.stringify({ error: 'Launch Library 2 unavailable' }),
+          'NONE',
+        );
+      }
+    });
+  }
+
+  return {
+    name: 'upcoming-launches-proxy',
     configureServer(server) {
       install(server.middlewares);
     },

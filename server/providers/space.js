@@ -2,6 +2,7 @@
 export { celestrakProxy } from './space/celestrak.js';
 export {
   rocketLaunchesProxy,
+  upcomingLaunchesProxy,
   LL2_CACHE_TTL_MS,
   launchLibraryRequestHeaders,
 } from './space/launch-library.js';

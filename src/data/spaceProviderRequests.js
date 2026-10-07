@@ -15,3 +15,10 @@ export function launchLibraryRecentUrl(end) {
   url.searchParams.set('mode', 'detailed');
   return url;
 }
+
+export function launchLibraryUpcomingUrl() {
+  const url = new URL('https://ll.thespacedevs.com/2.3.0/launches/upcoming/');
+  url.searchParams.set('limit', '25');
+  url.searchParams.set('mode', 'normal');
+  return url;
+}
