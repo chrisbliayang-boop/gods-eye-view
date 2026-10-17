@@ -18,6 +18,10 @@ const FEED_STATE_LABELS = Object.freeze({
 // Presentation order is independent of catalog registration and startup order.
 const PANEL_GROUPS = [
   {
+    label: 'People',
+    ids: ['family'],
+  },
+  {
     label: 'Movement',
     ids: [
       'satellites',
@@ -72,6 +76,7 @@ const PANEL_POSITIONS = new Map(
 const PANEL_LABELS = {
   'ais-live-vessels': 'Live Vessels',
   bikeshare: 'Bike Share',
+  family: 'Family (Dad)',
   cctv: 'Cameras',
   'street-level': 'Street Level',
   'alpr-cameras': 'Mapped ALPR Cameras',
