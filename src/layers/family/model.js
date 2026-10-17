@@ -52,3 +52,17 @@ export function familyFlightLegs(flights) {
   }
   return legs;
 }
+
+/** Destination countries whose mapped camera locations the layer shows. */
+export const FAMILY_CAMERA_COUNTRIES = Object.freeze(['TH']);
+
+/** One-line label for a live plane: flight, altitude and speed. */
+export function planeLabel(plane) {
+  const parts = [plane.flight || plane.callsign || 'Flight'];
+  if (plane.onGround) parts.push('on the ground');
+  else if (Number.isFinite(plane.altitudeFt))
+    parts.push(`${Math.round(plane.altitudeFt).toLocaleString('en-US')} ft`);
+  if (Number.isFinite(plane.groundSpeedKt))
+    parts.push(`${Math.round(plane.groundSpeedKt)} kt`);
+  return parts.join(' · ');
+}

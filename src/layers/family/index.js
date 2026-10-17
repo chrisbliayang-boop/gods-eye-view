@@ -1,9 +1,11 @@
 import * as Cesium from 'cesium';
 import {
+  FAMILY_CAMERA_COUNTRIES,
   FAMILY_OVERLAY_SOURCE_ID,
   familyFlightLegs,
   familyLabel,
   isFamilyPointStale,
+  planeLabel,
 } from './model.js';
 export * from './model.js';
 
@@ -11,6 +13,11 @@ const LIVE_COLOR = Cesium.Color.fromCssColorString('#2DD4BF');
 const STALE_COLOR = Cesium.Color.fromCssColorString('#F59E0B');
 const FLIGHT_COLOR = Cesium.Color.fromCssColorString('#93C5FD');
 const FLIGHT_HEIGHT_M = 10_000;
+const PLANE_COLOR = Cesium.Color.WHITE;
+const CAMERA_COLOR = Cesium.Color.fromCssColorString('#F472B6');
+/** Camera dots appear only once the view is closer than this (metres). */
+const CAMERA_VISIBLE_M = 2_500_000;
+const CAMERA_RETRY_MS = 10 * 60_000;
 
 /** Read one person's trail from the local /api/family route. */
 export function createFamilySource({
@@ -29,12 +36,34 @@ export function createFamilySource({
       if (!response.ok) throw new Error(`Family tracker HTTP ${response.status}`);
       return response.json();
     },
+    /** Live aircraft for a booked leg that may be in the air, else []. */
+    async getPlanes({ signal } = {}) {
+      const response = await fetchImpl(
+        `/api/family/${encodeURIComponent(personId)}/plane`,
+        { signal },
+      );
+      if (!response.ok) return [];
+      const body = await response.json();
+      return Array.isArray(body?.planes) ? body.planes : [];
+    },
+    /** OSM-mapped camera locations in one country. */
+    async getCameras(country, { signal } = {}) {
+      const response = await fetchImpl(
+        `/api/family/cameras/${encodeURIComponent(country)}`,
+        { signal },
+      );
+      if (!response.ok) throw new Error(`Camera list HTTP ${response.status}`);
+      const body = await response.json();
+      return Array.isArray(body?.cameras) ? body.cameras : [];
+    },
   };
 }
 
 /**
  * One family member who has agreed to share their location: a dot with
- * last-seen time and battery, their recent trail, and their flight legs.
+ * last-seen time and battery, their recent trail, their flight legs, their
+ * plane while a booked leg is in the air, and OSM-mapped camera locations
+ * (positions only, no feeds) in their destination country.
  * Local-only: it never enters share links or stored layer state.
  *
  * Opening the app with `?family=<id>` turns the layer on. Pair it with a
@@ -57,6 +86,9 @@ export function createFamilyLayer({
   let _lastError = null;
   let _focusPending = false;
   let _openedFromUrl = false;
+  let _planes = [];
+  let _cameras = [];
+  let _camerasTriedAt = 0;
 
   function render(snapshot) {
     const now = Date.now();
@@ -158,6 +190,60 @@ export function createFamilyLayer({
         });
       }
     }
+    for (const plane of _planes) {
+      const position = Cesium.Cartesian3.fromDegrees(
+        plane.lon,
+        plane.lat,
+        Number.isFinite(plane.altitudeFt) ? plane.altitudeFt * 0.3048 : 0,
+      );
+      entities.add({
+        id: `family:${personId}:plane:${plane.callsign}`,
+        position,
+        point: {
+          pixelSize: 13,
+          color: PLANE_COLOR,
+          outlineColor: FLIGHT_COLOR,
+          outlineWidth: 3,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        properties: { flight: plane.flight, callsign: plane.callsign },
+      });
+      overlayEntries.push({
+        id: `${personId}:plane:${plane.callsign}`,
+        position,
+        variant: 'label',
+        title: planeLabel(plane),
+        accent: FLIGHT_COLOR.toCssColorString(),
+        priority: Number.MAX_SAFE_INTEGER - 1,
+        protected: true,
+        collisionGroup: 'ambient-label',
+        paintLane: 'ambient-label',
+        interactive: false,
+        horizonCull: true,
+        terrainOcclusion: false,
+        gapPx: 15,
+        placement: 'above',
+      });
+    }
+
+    const cameraDisplay = new Cesium.DistanceDisplayCondition(0, CAMERA_VISIBLE_M);
+    for (const camera of _cameras) {
+      entities.add({
+        id: `family:camera:${camera.id}`,
+        position: Cesium.Cartesian3.fromDegrees(camera.lon, camera.lat),
+        point: {
+          pixelSize: 6,
+          color: CAMERA_COLOR,
+          outlineColor: Cesium.Color.BLACK.withAlpha(0.6),
+          outlineWidth: 1,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          distanceDisplayCondition: cameraDisplay,
+        },
+        properties: { kind: camera.kind, operator: camera.operator },
+      });
+    }
+
     _count = latest ? 1 : 0;
     if (_enabled)
       overlayHost.setEntries(FAMILY_OVERLAY_SOURCE_ID, overlayEntries, {
@@ -179,7 +265,7 @@ export function createFamilyLayer({
     name: 'Family',
     icon: '🧭',
     source: 'OwnTracks (local)',
-    updateInterval: 60_000,
+    updateInterval: 30_000,
 
     init(viewer) {
       if (_viewer) throw new Error('Family layer is already initialized');
@@ -230,9 +316,26 @@ export function createFamilyLayer({
       const request = new AbortController();
       _request = request;
       try {
-        const snapshot = await source.getSnapshot({ signal: request.signal });
+        const [snapshot, planes] = await Promise.all([
+          source.getSnapshot({ signal: request.signal }),
+          // A plane lookup failure must not hide the person.
+          source.getPlanes({ signal: request.signal }).catch(() => []),
+        ]);
+        if (
+          !_cameras.length &&
+          Date.now() - _camerasTriedAt > CAMERA_RETRY_MS
+        ) {
+          _camerasTriedAt = Date.now();
+          const lists = await Promise.all(
+            FAMILY_CAMERA_COUNTRIES.map((country) =>
+              source.getCameras(country, { signal: request.signal }).catch(() => []),
+            ),
+          );
+          _cameras = lists.flat();
+        }
         if (request.signal.aborted || _request !== request || !_enabled)
           return false;
+        _planes = planes;
         render(snapshot);
         if (_focusPending && snapshot?.latest) {
           _focusPending = false;
