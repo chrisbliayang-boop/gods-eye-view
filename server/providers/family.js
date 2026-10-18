@@ -5,6 +5,7 @@ import {
   FAMILY_CAMERA_COUNTRIES,
   createFamilyCameraStore,
 } from './family/cameras.js';
+import { createFamilyWebcamStore } from './family/webcams.js';
 
 /**
  * Family tracker feed for the Family layer.
@@ -16,7 +17,9 @@ import {
  *
  * During a booked flight, `/plane` looks the aircraft up on adsb.lol, and
  * `/api/family/cameras/<CC>` lists OSM-mapped camera locations; see
- * ./family/plane.js and ./family/cameras.js. Those are the only network calls.
+ * ./family/plane.js and ./family/cameras.js. `/api/family/webcams` lists
+ * Windy webcams around the view (./family/webcams.js). Those are the only
+ * network calls.
  *
  * `FAMILY_TRACKER_CONFIG` (optional) is the tracker's people file; only each
  * person's id, display name and flight legs are read from it, never any
@@ -137,12 +140,14 @@ async function readPerson(env, id) {
  *   /api/family/<id>          recent trail, latest point, name and flights
  *   /api/family/<id>/plane    live aircraft for a leg that may be airborne
  *   /api/family/cameras/<CC>  OSM camera locations in a destination country
+ *   /api/family/webcams?lat=&lon=&r=<km>  Windy webcams around the view
  */
 export function familyTrackerProxy({
   env = process.env,
   now = Date.now,
   fetchImpl = globalThis.fetch,
   cameraStore = createFamilyCameraStore({ env, fetchImpl }),
+  webcamStore = createFamilyWebcamStore({ env, fetchImpl, now }),
 } = {}) {
   let planeCache = null;
 
@@ -217,6 +222,11 @@ export function familyTrackerProxy({
       const [first, second, ...rest] = url.pathname
         .split('/')
         .filter(Boolean);
+      if (first === 'webcams' && !second) {
+        const p = url.searchParams;
+        send(res, 200, await webcamStore.get(p.get('lat'), p.get('lon'), p.get('r')));
+        return;
+      }
       if (first === 'cameras' && second && !rest.length) {
         await sendCameras(res, second.toUpperCase());
         return;

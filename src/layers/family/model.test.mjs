@@ -112,3 +112,53 @@ test('camera nodes keep position and type only', async () => {
   );
   assert.equal(normalizeCameraNodes({}), null);
 });
+
+test('webcam view areas snap so nearby views share a call', async () => {
+  const { webcamViewArea } = await import('../../../server/providers/family/webcams.js');
+  const a = webcamViewArea(13.7462, 100.5347, 12);
+  assert.equal(a.radiusKm, 15);
+  assert.deepEqual(webcamViewArea(13.747, 100.535, 11), a);
+  assert.equal(webcamViewArea(95, 0, 5), null);
+  assert.equal(webcamViewArea(1, 1, 0), null);
+  assert.equal(webcamViewArea('x', 1, 5), null);
+  assert.equal(webcamViewArea(1, 1, 9_999).radiusKm, 250);
+});
+
+test('webcams: live vs snapshot, key from file, cached per area', async () => {
+  const { createFamilyWebcamStore, normalizeWebcam } = await import(
+    '../../../server/providers/family/webcams.js'
+  );
+  const { mkdtemp, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  assert.equal(normalizeWebcam({ location: {} }), null);
+
+  const off = createFamilyWebcamStore({ env: {}, fetchImpl: () => assert.fail('no call') });
+  assert.deepEqual(await off.get(1, 2, 3), { enabled: false, webcams: [] });
+
+  const dir = await mkdtemp(path.join(tmpdir(), 'gev-webcams-'));
+  const keyFile = path.join(dir, 'key.json');
+  await writeFile(keyFile, JSON.stringify({ windy_key: 'k', links: [] }));
+  const calls = [];
+  const store = createFamilyWebcamStore({
+    env: { FAMILY_WEBCAMS_KEY_FILE: keyFile },
+    fetchImpl: async (url, init) => {
+      calls.push({ url: String(url), key: init.headers['x-windy-api-key'] });
+      return new Response(JSON.stringify({ total: 2, webcams: [
+        { webcamId: 7, title: 'Beach', location: { latitude: 12.9, longitude: 100.8 },
+          player: { live: 'https://w/live' }, images: { current: { preview: 'https://i/p.jpg' } } },
+        { webcamId: 8, title: 'Temple', location: { latitude: 18.8, longitude: 98.9 },
+          player: { day: 'https://w/day' } },
+      ] }));
+    },
+  });
+  const first = await store.get(13.7462, 100.5347, 12);
+  await store.get(13.747, 100.535, 11);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].key, 'k');
+  assert.match(calls[0].url, /nearby=13\.\d+%2C100\.\d+%2C15/);
+  assert.deepEqual(
+    first.webcams.map((w) => [w.id, w.live, w.watch]),
+    [['7', true, 'https://w/live'], ['8', false, 'https://w/day']],
+  );
+});
