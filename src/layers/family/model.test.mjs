@@ -101,10 +101,14 @@ test('camera nodes keep position and type only', async () => {
     normalizeCameraNodes({
       elements: [
         { type: 'node', id: 1, lat: 13.7, lon: 100.5, tags: { 'surveillance:type': 'camera', name: 'x' } },
+        { type: 'node', id: 3, lat: 13.8, lon: 100.6, tags: { highway: 'speed_camera' } },
         { type: 'way', id: 2 },
       ],
     }),
-    [{ id: 1, lat: 13.7, lon: 100.5, kind: 'camera', zone: null, operator: null }],
+    [
+      { id: 1, type: 'security', lat: 13.7, lon: 100.5, kind: 'camera', zone: null, operator: null },
+      { id: 3, type: 'speed', lat: 13.8, lon: 100.6, kind: null, zone: null, operator: null },
+    ],
   );
   assert.equal(normalizeCameraNodes({}), null);
 });

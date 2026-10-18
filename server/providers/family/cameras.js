@@ -3,8 +3,9 @@ import path from 'node:path';
 
 /**
  * Camera locations in a family member's destination country, from
- * OpenStreetMap (`man_made=surveillance`, ODbL). These are mapped camera
- * positions only, not viewable feeds. The country set is small and changes
+ * OpenStreetMap (ODbL): security cameras (`man_made=surveillance`) and
+ * speed / red-light cameras (`highway=speed_camera`). These are mapped
+ * camera positions only, not viewable feeds. The country set is small and changes
  * slowly, so one Overpass query is cached on disk for a week.
  */
 
@@ -16,9 +17,12 @@ export const FAMILY_CAMERAS_OVERPASS_ENV = 'FAMILY_CAMERAS_OVERPASS';
  */
 export const DEFAULT_CAMERAS_OVERPASS = Object.freeze([
   'https://overpass.private.coffee/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
 ]);
 export const FAMILY_CAMERA_COUNTRIES = Object.freeze(['TH']);
 const CACHE_TTL_MS = 7 * 86_400_000;
+/** Bumped when the query changes; an older cache is only a fallback. */
+const CACHE_VERSION = 2;
 const CACHE_DIR = path.join(process.cwd(), '.gev-cache', 'family');
 const USER_AGENT =
   'gods-eye-view/0.1 (+https://github.com/bilawalsidhu/gods-eye-view)';
@@ -27,7 +31,7 @@ export function camerasQuery(country) {
   return (
     `[out:json][timeout:180];` +
     `area["ISO3166-1"="${country}"][admin_level=2]->.c;` +
-    `node["man_made"="surveillance"](area.c);out;`
+    `(node["man_made"="surveillance"](area.c);node["highway"="speed_camera"](area.c););out;`
   );
 }
 
@@ -41,6 +45,7 @@ export function normalizeCameraNodes(payload) {
     const tags = node.tags && typeof node.tags === 'object' ? node.tags : {};
     cameras.push({
       id: node.id,
+      type: tags.highway === 'speed_camera' ? 'speed' : 'security',
       lat: node.lat,
       lon: node.lon,
       kind: tags['surveillance:type'] || null,
@@ -63,14 +68,15 @@ export function createFamilyCameraStore({
 
   async function load(country) {
     const cached = memory.get(country);
-    if (cached && now() - cached.at < CACHE_TTL_MS) return cached;
+    if (cached?.version === CACHE_VERSION && now() - cached.at < CACHE_TTL_MS)
+      return cached;
     const file = path.join(cacheDir, `cameras-${country}.json`);
     let stale = cached ?? null;
     try {
       const disk = JSON.parse(await readFile(file, 'utf8'));
       if (Array.isArray(disk?.cameras)) {
         stale = disk;
-        if (now() - disk.at < CACHE_TTL_MS) {
+        if (disk.version === CACHE_VERSION && now() - disk.at < CACHE_TTL_MS) {
           memory.set(country, disk);
           return disk;
         }
@@ -104,7 +110,7 @@ export function createFamilyCameraStore({
         }
       }
       if (!cameras) throw lastError ?? new Error('No Overpass upstream');
-      const fresh = { at: now(), country, cameras };
+      const fresh = { version: CACHE_VERSION, at: now(), country, cameras };
       memory.set(country, fresh);
       await mkdir(cacheDir, { recursive: true });
       await writeFile(file, JSON.stringify(fresh));

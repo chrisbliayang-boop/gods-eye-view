@@ -15,6 +15,7 @@ const FLIGHT_COLOR = Cesium.Color.fromCssColorString('#93C5FD');
 const FLIGHT_HEIGHT_M = 10_000;
 const PLANE_COLOR = Cesium.Color.WHITE;
 const CAMERA_COLOR = Cesium.Color.fromCssColorString('#F472B6');
+const SPEED_CAMERA_COLOR = Cesium.Color.fromCssColorString('#FACC15');
 /** Camera dots appear only once the view is closer than this (metres). */
 const CAMERA_VISIBLE_M = 2_500_000;
 const CAMERA_RETRY_MS = 10 * 60_000;
@@ -233,14 +234,14 @@ export function createFamilyLayer({
         position: Cesium.Cartesian3.fromDegrees(camera.lon, camera.lat),
         point: {
           pixelSize: 6,
-          color: CAMERA_COLOR,
+          color: camera.type === 'speed' ? SPEED_CAMERA_COLOR : CAMERA_COLOR,
           outlineColor: Cesium.Color.BLACK.withAlpha(0.6),
           outlineWidth: 1,
           heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
           distanceDisplayCondition: cameraDisplay,
         },
-        properties: { kind: camera.kind, operator: camera.operator },
+        properties: { type: camera.type, kind: camera.kind, operator: camera.operator },
       });
     }
 
